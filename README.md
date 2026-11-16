@@ -31,3 +31,10 @@ cd vesuvius-ink-bench
 .venv\Scripts\python.exe -m pytest -v
 .venv\Scripts\python.exe -m vesuvius_ink_bench.benchmark --output-dir reports
 ```
+
+## License & Dataset Attribution
+
+- **Code License**: Released under the **MIT License** (see [LICENSE](LICENSE)).
+- **Dataset Attribution**: Tomographic sub-volume benchmarks use the **EduceLab-Scrolls / Herculaneum CT scan dataset (`PHerc0332`)** hosted on AWS Open Data (`s3://vesuvius-challenge-open-data/`) in accordance with the **Vesuvius Challenge Data Agreement** (underlying tomographic data distributed under **CC BY-NC 4.0** by EduceLab / Vesuvius Challenge).
+- **Pretrained Weights**: `scrollprize/ink_canonical_2um` (`r152_3ddec_v2_l5_epoch13.ckpt`), released under the **MIT License** by the Vesuvius Challenge.
+
