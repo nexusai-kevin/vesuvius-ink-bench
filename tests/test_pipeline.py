@@ -9,6 +9,7 @@ import torch
 import zarr
 
 from vesuvius_ink_bench.config import CacheConfig, InferenceConfig, ZarrSourceConfig
+from vesuvius_ink_bench.infer import run_inference
 from vesuvius_ink_bench.model import VillaInkResNet3D
 from vesuvius_ink_bench.pipeline import MixedPrecisionInkPipeline
 from vesuvius_ink_bench.windowing import compute_hann_window_3d, compute_seam_metrics
@@ -102,3 +103,47 @@ def test_pipeline_end_to_end_smoke() -> None:
     assert res.blended_mip_2d.shape == (128, 128)
     assert res.metrics["num_tiles"] == 27
     assert res.metrics["within_vram_budget"] is True
+
+
+def test_vesuvius_infer_exports_ome_zarr_tiff_and_png(tmp_path: Path) -> None:
+    ckpt_path = Path("checkpoints/ink_canonical_2um/r152_3ddec_v2_l5_epoch13.ckpt")
+    if not ckpt_path.exists():
+        return
+
+    from PIL import Image
+
+    src_zarr = tmp_path / "input_scroll.zarr"
+    root = zarr.open_group(str(src_zarr), mode="w")
+    arr = root.create_dataset("2", shape=(64, 128, 128), chunks=(64, 128, 128), dtype="uint8")
+    arr[:] = np.random.default_rng(11).integers(20, 220, size=(64, 128, 128), dtype=np.uint8)
+
+    out_dir = tmp_path / "infer_out"
+    summary = run_inference(
+        uri=str(src_zarr),
+        level="2",
+        full_level=True,
+        output_dir=out_dir,
+        batch_size=4,
+        amp_dtype="bfloat16" if torch.cuda.is_available() else "float32",
+        checkpoint_path=ckpt_path,
+    )
+
+    zarr_out = Path(summary["exports"]["ome_zarr"])
+    tiff_out = Path(summary["exports"]["tiff_16bit"])
+    png_out = Path(summary["exports"]["png_surface"])
+
+    assert zarr_out.exists()
+    assert tiff_out.exists()
+    assert png_out.exists()
+    assert (out_dir / "inference_summary.json").exists()
+
+    out_group = zarr.open_group(str(zarr_out), mode="r")
+    assert "multiscales" in out_group.attrs
+    assert out_group["0"].shape == (64, 128, 128)
+    assert out_group["surface_mip_2d"].shape == (128, 128)
+
+    with Image.open(tiff_out) as im:
+        u16 = np.asarray(im)
+        assert u16.dtype == np.uint16
+        assert u16.shape == (128, 128)
+

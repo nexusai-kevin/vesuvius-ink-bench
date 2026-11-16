@@ -22,14 +22,38 @@ Volumetric ink-detection benchmarking workspace compatible with **`ScrollPrize/v
 | **Seam Discontinuity Reduction** | `71.73%` (`13.1677x` unblended vs `4.1602x` 3D Hann-blended) |
 | **2D Ink MIP Probability** | `min=0.036768`, `mean=0.348697`, `p99=0.708491`, `max=0.855716` |
 
-## Quick Start
+## Quick Start: Production Low-VRAM Inference (`vesuvius-infer`)
 
-On first run, `vesuvius-bench` automatically downloads the pretrained `scrollprize/ink_canonical_2um` checkpoint (`r152_3ddec_v2_l5_epoch13.ckpt`) from Hugging Face into `checkpoints/ink_canonical_2um/` (which is git-ignored) if not already present.
+`vesuvius-infer` streams any public AWS Open Data Herculaneum OME-Zarr URL (or local `.zarr` volume) using the host DDR5 RAM cache, runs `bfloat16` mixed-precision ResNet3D-152 inference in **under 3 GiB VRAM** with 3D Hann-window overlap blending, and exports:
+- `ink_predictions.zarr` — Blosc/Zstd-compressed OME-Zarr (`0` 3D volume + `surface_mip_2d` projection)
+- `ink_surface_16bit.tiff` — 16-bit grayscale TIFF surface projection (`uint16`)
+- `ink_surface.png` — 2D ink probability heatmap
+- `inference_summary.json` — ROI, VRAM, and throughput telemetry
+
+On first run, `vesuvius-infer` (and `vesuvius-bench`) automatically downloads the pretrained `scrollprize/ink_canonical_2um` checkpoint (`r152_3ddec_v2_l5_epoch13.ckpt`) from Hugging Face into `checkpoints/ink_canonical_2um/` (git-ignored) if not already present.
 
 ```powershell
 cd vesuvius-ink-bench
+
+# 1. Custom (z, y, x) bounding-box inference on AWS Open Data PHerc0332
+.venv\Scripts\vesuvius-infer.exe `
+  --uri s3://vesuvius-challenge-open-data/PHerc0332/volumes/20251211183505-2.399um-0.2m-78keV-masked.zarr `
+  --level 2 `
+  --origin 4096 1792 1792 `
+  --shape 128 384 384 `
+  --output-dir outputs
+
+# 2. Or full-level inference on a local or remote OME-Zarr level
+.venv\Scripts\vesuvius-infer.exe --uri path/to/scroll.zarr --level 2 --full-level --output-dir outputs
+```
+
+## Reproducible Validation Suite (`vesuvius-bench`)
+
+Use `vesuvius-bench` to run the end-to-end verification pass (cold S3 stream vs. warm DDR5 cache read, RTX 5080 throughput & VRAM profiling, seam-blending discontinuity quantification, and Markdown/JSON report generation) and `pytest` to run the unit/integration suite:
+
+```powershell
 .venv\Scripts\python.exe -m pytest -v
-.venv\Scripts\python.exe -m vesuvius_ink_bench.benchmark --output-dir reports
+.venv\Scripts\vesuvius-bench.exe --output-dir reports
 ```
 
 ## License & Dataset Attribution

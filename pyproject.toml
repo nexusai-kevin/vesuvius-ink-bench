@@ -27,6 +27,7 @@ dev = [
 ]
 
 [project.scripts]
+vesuvius-infer = "vesuvius_ink_bench.infer:main"
 vesuvius-bench = "vesuvius_ink_bench.benchmark:main"
 
 [tool.hatch.build.targets.wheel]
