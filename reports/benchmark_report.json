@@ -1,0 +1,137 @@
+{
+  "timestamp_utc": "2026-11-16T20:56:00.936590+00:00",
+  "environment": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.13",
+    "torch": "2.11.0+cu128",
+    "cuda_available": true,
+    "cuda_version": "12.8",
+    "gpu_name": "NVIDIA GeForce RTX 5080"
+  },
+  "zarr_source": {
+    "uri": "s3://vesuvius-challenge-open-data/PHerc0332/volumes/20251211183505-2.399um-0.2m-78keV-masked.zarr",
+    "level": "2",
+    "shape": [
+      8398,
+      3941,
+      3941
+    ],
+    "chunks": [
+      128,
+      128,
+      128
+    ],
+    "dtype": "uint8",
+    "multiscales_present": true,
+    "selected_roi_origin": [
+      4096,
+      1792,
+      1792
+    ],
+    "selected_roi_shape": [
+      128,
+      384,
+      384
+    ],
+    "roi_nonzero_fraction": 1.0,
+    "roi_bytes": 18874368
+  },
+  "ddr5_cache": {
+    "budget_gib": 16.0,
+    "cold_stream_seconds": 1.753,
+    "warm_ddr5_read_seconds": 0.007922,
+    "warm_ddr5_bandwidth_gb_s": 2.38,
+    "after_cold_stats": {
+      "hits": 0,
+      "misses": 9,
+      "evictions": 0,
+      "hit_rate": 0.0,
+      "bytes_cached": 18874368,
+      "bytes_fetched_remote": 18874368,
+      "bytes_served_from_cache": 0,
+      "remote_fetch_seconds": 13.2327
+    },
+    "after_warm_stats": {
+      "hits": 9,
+      "misses": 9,
+      "evictions": 0,
+      "hit_rate": 0.5,
+      "bytes_cached": 18874368,
+      "bytes_fetched_remote": 18874368,
+      "bytes_served_from_cache": 18874368,
+      "remote_fetch_seconds": 13.2327
+    }
+  },
+  "pretrained_checkpoint": {
+    "hf_repo_id": "scrollprize/ink_canonical_2um",
+    "backbone": "ResNet3D-152 + 3D FPN Decoder (i3d)",
+    "checkpoint_path": "checkpoints\\ink_canonical_2um\\r152_3ddec_v2_l5_epoch13.ckpt",
+    "epoch": 13,
+    "global_step": 113246,
+    "hyper_parameters": {
+      "pred_shape": [
+        4608,
+        13824
+      ],
+      "size": 256,
+      "enc": "r152",
+      "with_norm": true,
+      "total_steps": 8089
+    },
+    "num_state_dict_tensors": 976
+  },
+  "inference_benchmark": {
+    "device": "cuda",
+    "device_name": "NVIDIA GeForce RTX 5080",
+    "amp_dtype": "bfloat16",
+    "roi_shape": [
+      128,
+      384,
+      384
+    ],
+    "roi_voxels": 18874368,
+    "tile_shape": [
+      64,
+      128,
+      128
+    ],
+    "stride": [
+      32,
+      64,
+      64
+    ],
+    "num_tiles": 75,
+    "batch_size": 8,
+    "total_processed_tile_voxels": 78643200,
+    "wall_seconds": 1.1936,
+    "gpu_seconds": 1.1425,
+    "throughput_roi_voxels_per_sec": 15813451.5,
+    "throughput_tile_voxels_per_sec": 68833531.1,
+    "tiles_per_sec": 65.64,
+    "peak_vram_allocated_mib": 2442.13,
+    "peak_vram_reserved_mib": 2912.0,
+    "vram_limit_gib": 14.5,
+    "within_vram_budget": true,
+    "seam_quality": {
+      "unblended_seam_gradient": 0.118811,
+      "unblended_interior_gradient": 0.009023,
+      "unblended_seam_to_interior_ratio": 13.1677,
+      "hann_seam_gradient": 0.033587,
+      "hann_interior_gradient": 0.008073,
+      "hann_seam_to_interior_ratio": 4.1602,
+      "seam_discontinuity_reduction_pct": 71.73
+    },
+    "ink_probability_stats_2d_mip": {
+      "min": 0.036768,
+      "max": 0.855716,
+      "mean": 0.348697,
+      "std": 0.147967,
+      "p50": 0.327662,
+      "p99": 0.708491
+    }
+  },
+  "artifacts": {
+    "ink_surface_prediction_png": "reports\\ink_surface_prediction.png",
+    "seam_blending_comparison_png": "reports\\seam_blending_comparison.png"
+  }
+}

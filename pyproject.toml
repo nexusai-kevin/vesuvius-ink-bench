@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vesuvius-ink-bench"
+version = "0.1.0"
+description = "Volumetric ink-detection benchmarking workspace compatible with ScrollPrize/villa and AWS Open Data Herculaneum scroll OME-Zarr volumes"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.0.0",
+    "zarr>=2.18.0,<3.0.0",
+    "fsspec>=2024.6.0",
+    "s3fs>=2024.6.0",
+    "numcodecs>=0.13.0",
+    "pillow>=10.4.0",
+    "matplotlib>=3.9.0",
+    "tqdm>=4.66.0",
+    "huggingface_hub>=0.25.0",
+    "safetensors>=0.4.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+]
+
+[project.scripts]
+vesuvius-bench = "vesuvius_ink_bench.benchmark:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vesuvius_ink_bench"]

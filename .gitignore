@@ -1,0 +1,15 @@
+# Virtual environments & caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Pretrained Hugging Face checkpoints (auto-downloaded on first run)
+checkpoints/
+
+# OS & editor files
+.DS_Store
+Thumbs.db
