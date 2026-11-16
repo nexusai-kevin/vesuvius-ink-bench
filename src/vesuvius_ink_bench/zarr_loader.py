@@ -13,9 +13,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-import fsspec
 import numpy as np
 import zarr
+import zarr.storage
 
 from vesuvius_ink_bench.config import CacheConfig, ZarrSourceConfig
 
@@ -105,14 +105,16 @@ class DDR5ChunkCache:
             return len(self._entries)
 
 
-def _open_zarr_group(uri: str, anon: bool = True) -> zarr.Group:
-    """Open a local, HTTPS, or S3 OME-Zarr group without downloading the dataset."""
-    if uri.startswith("s3://"):
-        fs = fsspec.filesystem("s3", anon=anon)
-        store = fs.get_mapper(uri.rstrip("/") + "/")
+def open_zarr_group(uri: str, anon: bool = True) -> zarr.Group:
+    """Open a local, HTTPS, or S3 OME-Zarr (v2 or v3) group without bulk download."""
+    clean_uri = uri.rstrip("/")
+    if clean_uri.startswith("s3://"):
+        store = zarr.storage.FsspecStore.from_url(
+            clean_uri, storage_options={"anon": anon}
+        )
         return zarr.open_group(store, mode="r")
-    if uri.startswith(("http://", "https://")):
-        store = fsspec.get_mapper(uri.rstrip("/") + "/")
+    if clean_uri.startswith(("http://", "https://")):
+        store = zarr.storage.FsspecStore.from_url(clean_uri)
         return zarr.open_group(store, mode="r")
     return zarr.open_group(uri, mode="r")
 
@@ -131,7 +133,7 @@ class StreamingZarrSubvolumeLoader:
         self.source = source
         self.cache_config = cache_config or CacheConfig()
         self.cache = cache or DDR5ChunkCache(max_bytes=self.cache_config.max_bytes)
-        self.group = zarr_group if zarr_group is not None else _open_zarr_group(source.uri, anon=source.anon)
+        self.group = zarr_group if zarr_group is not None else open_zarr_group(source.uri, anon=source.anon)
 
         if source.level not in self.group:
             available = list(self.group.array_keys())

@@ -12,7 +12,12 @@ from vesuvius_ink_bench.config import CacheConfig, InferenceConfig, ZarrSourceCo
 from vesuvius_ink_bench.infer import run_inference
 from vesuvius_ink_bench.model import VillaInkResNet3D
 from vesuvius_ink_bench.pipeline import MixedPrecisionInkPipeline
-from vesuvius_ink_bench.windowing import compute_hann_window_3d, compute_seam_metrics
+from vesuvius_ink_bench.windowing import (
+    compute_hann_window_3d,
+    compute_ink_accuracy_metrics,
+    compute_seam_metrics,
+    project_surface_z_hann,
+)
 from vesuvius_ink_bench.zarr_loader import DDR5ChunkCache, StreamingZarrSubvolumeLoader
 
 
@@ -37,7 +42,7 @@ def test_streaming_zarr_loader_local_ome_zarr(tmp_path: Path) -> None:
     store_path = tmp_path / "scroll_sample.zarr"
     root = zarr.open_group(str(store_path), mode="w")
     root.attrs["multiscales"] = [{"version": "0.4"}]
-    arr = root.create_dataset("0", shape=(64, 128, 128), chunks=(32, 64, 64), dtype="uint8")
+    arr = root.create_array("0", shape=(64, 128, 128), chunks=(32, 64, 64), dtype="uint8")
     rng = np.random.default_rng(0)
     data = rng.integers(10, 240, size=(64, 128, 128), dtype=np.uint8)
     arr[:] = data
@@ -56,11 +61,19 @@ def test_streaming_zarr_loader_local_ome_zarr(tmp_path: Path) -> None:
     assert loader.cache.stats.hits > hits_before
 
 
-def test_hann_window_3d_symmetry_and_seam_suppression() -> None:
+def test_hann_window_3d_separable_and_seam_suppression() -> None:
     win = compute_hann_window_3d((32, 64, 64), min_weight=1e-3)
     assert win.shape == (32, 64, 64)
     assert torch.isclose(win[16, 32, 32], torch.tensor(1.0), atol=1e-2)
-    assert float(win.min()) >= 1e-3
+    # Separable raised window preserves Y-X taper even at z=0
+    assert float(win[0, 32, 32]) > float(win[0, 0, 0])
+    assert float(win.min()) > 0.0
+
+    # Smooth Z-Hann projection removes boundary slice dominance
+    vol3d = np.ones((16, 32, 32), dtype=np.float32) * 0.2
+    vol3d[0, :, :] = 1.0  # noisy outer slice
+    proj = project_surface_z_hann(vol3d)
+    assert float(proj.mean()) < 0.25
 
     # Synthetic seam test: step discontinuities at stride=32 vs smooth field
     y, x = np.mgrid[0:128, 0:128]
@@ -72,6 +85,16 @@ def test_hann_window_3d_symmetry_and_seam_suppression() -> None:
     metrics = compute_seam_metrics(smooth, seamed, tile_shape=(64, 64), stride=(32, 32))
     assert metrics["hann_seam_to_interior_ratio"] < metrics["unblended_seam_to_interior_ratio"]
     assert metrics["seam_discontinuity_reduction_pct"] > 50.0
+
+
+def test_ink_accuracy_metrics() -> None:
+    gt = np.array([[1, 1, 0, 0], [1, 0, 0, 0]], dtype=np.uint8)
+    prob = np.array([[0.9, 0.8, 0.2, 0.1], [0.7, 0.3, 0.1, 0.2]], dtype=np.float32)
+    m = compute_ink_accuracy_metrics(gt, prob, threshold=0.5)
+    assert m["roc_auc"] == 1.0
+    assert m["dice_f1"] == 1.0
+    assert m["f0_5"] == 1.0
+    assert m["iou"] == 1.0
 
 
 def test_pretrained_checkpoint_strict_load() -> None:
@@ -97,12 +120,17 @@ def test_pipeline_end_to_end_smoke() -> None:
         batch_size=4,
         amp_dtype="bfloat16" if torch.cuda.is_available() else "float32",
         device="cuda" if torch.cuda.is_available() else "cpu",
+        use_channels_last_3d=True,
+        seed=123,
     )
-    pipe = MixedPrecisionInkPipeline(model, cfg)
+    pipe = MixedPrecisionInkPipeline(model, cfg, pin_staging_buffer=False)
     res = pipe.run(vol, warmup_batches=0)
-    assert res.blended_mip_2d.shape == (128, 128)
+    assert res.blended_surface_2d.shape == (128, 128)
     assert res.metrics["num_tiles"] == 27
     assert res.metrics["within_vram_budget"] is True
+    assert res.metrics["pin_staging_buffer"] is False
+    assert res.metrics["use_channels_last_3d"] is True
+    assert res.metrics["seed"] == 123
 
 
 def test_vesuvius_infer_exports_ome_zarr_tiff_and_png(tmp_path: Path) -> None:
@@ -114,7 +142,7 @@ def test_vesuvius_infer_exports_ome_zarr_tiff_and_png(tmp_path: Path) -> None:
 
     src_zarr = tmp_path / "input_scroll.zarr"
     root = zarr.open_group(str(src_zarr), mode="w")
-    arr = root.create_dataset("2", shape=(64, 128, 128), chunks=(64, 128, 128), dtype="uint8")
+    arr = root.create_array("2", shape=(64, 128, 128), chunks=(64, 128, 128), dtype="uint8")
     arr[:] = np.random.default_rng(11).integers(20, 220, size=(64, 128, 128), dtype=np.uint8)
 
     out_dir = tmp_path / "infer_out"
@@ -129,8 +157,8 @@ def test_vesuvius_infer_exports_ome_zarr_tiff_and_png(tmp_path: Path) -> None:
     )
 
     zarr_out = Path(summary["exports"]["ome_zarr"])
-    tiff_out = Path(summary["exports"]["tiff_16bit"])
-    png_out = Path(summary["exports"]["png_surface"])
+    tiff_out = Path(summary["exports"]["primary_tiff_16bit"])
+    png_out = Path(summary["exports"]["primary_png_surface"])
 
     assert zarr_out.exists()
     assert tiff_out.exists()
@@ -140,10 +168,9 @@ def test_vesuvius_infer_exports_ome_zarr_tiff_and_png(tmp_path: Path) -> None:
     out_group = zarr.open_group(str(zarr_out), mode="r")
     assert "multiscales" in out_group.attrs
     assert out_group["0"].shape == (64, 128, 128)
-    assert out_group["surface_mip_2d"].shape == (128, 128)
+    assert out_group["surface_prob_2d"].shape == (128, 128)
 
     with Image.open(tiff_out) as im:
         u16 = np.asarray(im)
         assert u16.dtype == np.uint16
         assert u16.shape == (128, 128)
-

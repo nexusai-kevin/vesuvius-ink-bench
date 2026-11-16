@@ -1,4 +1,8 @@
-"""Pretrained ResNet3D-152 + 3D-decoder ink-detection architecture (scrollprize/ink_canonical_2um)."""
+"""Pretrained ResNet3D-152 + 3D-decoder ink-detection architecture (scrollprize/ink_canonical_2um).
+
+Matches ``ScrollPrize/villa`` (``ink-detection/optimized_inference/model_resnet3d_3d_decoder.py``)
+with ``GroupNorm(min(32, C), C)`` and ``ReLU`` activations throughout the 3D FPN decoder.
+"""
 
 from __future__ import annotations
 
@@ -98,22 +102,26 @@ class ResNet3DBackbone(nn.Module):
 
 
 class DecoderResBlock3D(nn.Module):
-    """3D GroupNorm residual decoder block matching ``decoder.decoder_blocks.*``."""
+    """3D GroupNorm residual decoder block matching ``ResConvBlock3D``."""
 
-    def __init__(self, in_ch: int, out_ch: int, groups: int = 8) -> None:
+    def __init__(self, in_ch: int, out_ch: int, max_groups: int = 32) -> None:
         super().__init__()
-        g = min(groups, out_ch)
+        g = min(max_groups, out_ch)
         self.conv1 = nn.Conv3d(in_ch, out_ch, kernel_size=3, padding=1, bias=False)
         self.gn1 = nn.GroupNorm(g, out_ch)
         self.conv2 = nn.Conv3d(out_ch, out_ch, kernel_size=3, padding=1, bias=False)
         self.gn2 = nn.GroupNorm(g, out_ch)
-        self.shortcut = nn.Conv3d(in_ch, out_ch, kernel_size=1, bias=False)
-        self.act = nn.GELU()
+        self.shortcut = (
+            nn.Conv3d(in_ch, out_ch, kernel_size=1, bias=False)
+            if in_ch != out_ch
+            else nn.Identity()
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h = self.act(self.gn1(self.conv1(x)))
+        identity = self.shortcut(x)
+        h = F.relu(self.gn1(self.conv1(x)), inplace=True)
         h = self.gn2(self.conv2(h))
-        return self.act(h + self.shortcut(x))
+        return F.relu(h + identity, inplace=True)
 
 
 class DepthAttentionCollapse(nn.Module):
@@ -133,14 +141,15 @@ class AuxHead2D(nn.Module):
 
     def __init__(self, in_ch: int) -> None:
         super().__init__()
+        self.pool = nn.AdaptiveAvgPool3d((1, None, None))
         self.conv = nn.Conv2d(in_ch, 1, kernel_size=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.conv(x)
+        return self.conv(self.pool(x).squeeze(2))
 
 
 class InkDecoder3D(nn.Module):
-    """3D FPN-style decoder with attention depth-collapse and 2D logit head."""
+    """3D FPN-style decoder matching ``Decoder3DUNet`` in ScrollPrize/villa."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -150,7 +159,8 @@ class InkDecoder3D(nn.Module):
             [
                 nn.Sequential(
                     nn.Conv3d(ic, oc, kernel_size=1, bias=False),
-                    nn.GroupNorm(min(8, oc), oc),
+                    nn.GroupNorm(min(32, oc), oc),
+                    nn.ReLU(inplace=True),
                 )
                 for ic, oc in zip(in_channels, out_channels)
             ]
@@ -219,7 +229,7 @@ class VillaInkResNet3D(nn.Module):
         *,
         strict: bool = True,
     ) -> Tuple["VillaInkResNet3D", Dict[str, Any]]:
-        """Load pretrained ScrollPrize/villa Lightning or safetensors checkpoint."""
+        """Load pretrained ScrollPrize/villa checkpoint using safe ``weights_only=True``."""
         ckpt_path = Path(checkpoint_path)
         if not ckpt_path.exists():
             raise FileNotFoundError(
@@ -227,7 +237,7 @@ class VillaInkResNet3D(nn.Module):
                 "Download it from Hugging Face (scrollprize/ink_canonical_2um)."
             )
 
-        ckpt = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
+        ckpt = torch.load(str(ckpt_path), map_location="cpu", weights_only=True)
         hparams: Dict[str, Any] = dict(ckpt.get("hyper_parameters", {}))
         with_norm = bool(hparams.get("with_norm", True))
         model = cls(with_norm=with_norm)

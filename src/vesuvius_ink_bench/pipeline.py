@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import numpy as np
 import torch
@@ -15,6 +15,7 @@ from vesuvius_ink_bench.windowing import (
     compute_hann_window_3d,
     compute_seam_metrics,
     compute_tile_grid,
+    project_surface_z_hann,
 )
 
 
@@ -31,9 +32,9 @@ class InferenceResult:
 
     blended_3d: np.ndarray
     unblended_3d: np.ndarray
-    blended_mip_2d: np.ndarray
+    blended_surface_2d: np.ndarray
     blended_mean_2d: np.ndarray
-    unblended_mip_2d: np.ndarray
+    unblended_surface_2d: np.ndarray
     metrics: Dict[str, object]
 
 
@@ -44,13 +45,25 @@ class MixedPrecisionInkPipeline:
         self,
         model: nn.Module,
         config: Optional[InferenceConfig] = None,
+        *,
+        pin_staging_buffer: bool = True,
     ) -> None:
         self.config = config or InferenceConfig()
+        self.pin_staging_buffer = pin_staging_buffer
+        torch.manual_seed(self.config.seed)
+
         self.device = torch.device(
             self.config.device if (self.config.device != "cuda" or torch.cuda.is_available()) else "cpu"
         )
+        if self.device.type == "cuda":
+            torch.cuda.manual_seed_all(self.config.seed)
+
         self.amp_dtype = _DTYPE_MAP[self.config.amp_dtype]
         self.model = model.to(self.device).eval()
+        if self.config.use_channels_last_3d:
+            for mod in self.model.modules():
+                if isinstance(mod, (nn.Conv3d, nn.BatchNorm3d)):
+                    mod.to(memory_format=torch.channels_last_3d)
 
         if self.config.compile_model and hasattr(torch, "compile"):
             self.model = torch.compile(self.model, mode="reduce-overhead")
@@ -63,11 +76,23 @@ class MixedPrecisionInkPipeline:
 
     def _run_batch(self, batch_cpu: torch.Tensor) -> torch.Tensor:
         if self.device.type == "cuda":
-            batch_dev = batch_cpu.to(self.device, non_blocking=True)
+            if self.config.use_channels_last_3d:
+                batch_dev = batch_cpu.to(
+                    self.device,
+                    memory_format=torch.channels_last_3d,
+                    non_blocking=True,
+                )
+            else:
+                batch_dev = batch_cpu.to(self.device, non_blocking=True)
             with torch.amp.autocast(device_type="cuda", dtype=self.amp_dtype):
                 logits = self.model(batch_dev)
         else:
-            logits = self.model(batch_cpu)
+            batch_in = (
+                batch_cpu.to(memory_format=torch.channels_last_3d)
+                if self.config.use_channels_last_3d
+                else batch_cpu
+            )
+            logits = self.model(batch_in)
         return torch.sigmoid(logits.float())
 
     @torch.inference_mode()
@@ -86,19 +111,19 @@ class MixedPrecisionInkPipeline:
         coords = compute_tile_grid((vd, vh, vw), (td, th, tw), self.config.stride)
         num_tiles = len(coords)
 
-        # Normalize host volume once into float32 [0, 1] in host DDR5 RAM
+        # Normalize uint8 CT intensities to [0, 1] matching ScrollPrize/villa BatchNorm3d stats
         vol_host = torch.from_numpy(np.ascontiguousarray(volume)).to(torch.float32) / 255.0
-        if self.device.type == "cuda":
+        if self.pin_staging_buffer and self.device.type == "cuda":
             vol_host = vol_host.pin_memory()
 
-        # Accumulators on device for fast 3D Hann-window blending
         blended_accum = torch.zeros((vd, vh, vw), dtype=torch.float32, device=self.device)
         weight_accum = torch.zeros((vd, vh, vw), dtype=torch.float32, device=self.device)
         unblended_vol = torch.zeros((vd, vh, vw), dtype=torch.float32, device=self.device)
 
-        # Warmup pass for CUDA kernels / tensor cores before timed run
         if warmup_batches > 0 and self.device.type == "cuda":
-            dummy = torch.zeros((min(self.config.batch_size, num_tiles), 1, td, th, tw), dtype=torch.float32)
+            dummy = torch.zeros(
+                (min(self.config.batch_size, num_tiles), 1, td, th, tw), dtype=torch.float32
+            )
             for _ in range(warmup_batches):
                 _ = self._run_batch(dummy)
             torch.cuda.synchronize()
@@ -119,7 +144,7 @@ class MixedPrecisionInkPipeline:
                 for (z, y, x) in batch_coords
             ]
             batch_tensor = torch.stack(tiles, dim=0)
-            if self.device.type == "cuda":
+            if self.pin_staging_buffer and self.device.type == "cuda":
                 batch_tensor = batch_tensor.pin_memory()
 
             probs = self._run_batch(batch_tensor).squeeze(1)  # (B, th, tw) or (B, td, th, tw)
@@ -145,18 +170,19 @@ class MixedPrecisionInkPipeline:
             peak_reserved_bytes = 0
 
         wall_s = time.perf_counter() - t_wall_0
-        blended_vol = blended_accum / weight_accum.clamp_min(1e-6)
+        blended_vol = blended_accum / weight_accum.clamp_min(1e-24)
 
         blended_np = blended_vol.cpu().numpy()
         unblended_np = unblended_vol.cpu().numpy()
 
-        blended_mip_2d = blended_np.max(axis=0)
+        # Smooth Z-Hann depth aggregation eliminates Z-slab rectangular boundaries
+        blended_surface_2d = project_surface_z_hann(blended_np)
         blended_mean_2d = blended_np.mean(axis=0)
-        unblended_mip_2d = unblended_np.max(axis=0)
+        unblended_surface_2d = project_surface_z_hann(unblended_np)
 
         seam_metrics = compute_seam_metrics(
-            blended_mip_2d,
-            unblended_mip_2d,
+            blended_surface_2d,
+            unblended_surface_2d,
             tile_shape=(th, tw),
             stride=(self.config.stride[1], self.config.stride[2]),
         )
@@ -167,6 +193,9 @@ class MixedPrecisionInkPipeline:
             "device": str(self.device),
             "device_name": torch.cuda.get_device_name(self.device) if self.device.type == "cuda" else "cpu",
             "amp_dtype": self.config.amp_dtype,
+            "pin_staging_buffer": self.pin_staging_buffer,
+            "use_channels_last_3d": self.config.use_channels_last_3d,
+            "seed": self.config.seed,
             "roi_shape": [vd, vh, vw],
             "roi_voxels": roi_voxels,
             "tile_shape": [td, th, tw],
@@ -189,8 +218,8 @@ class MixedPrecisionInkPipeline:
         return InferenceResult(
             blended_3d=blended_np,
             unblended_3d=unblended_np,
-            blended_mip_2d=blended_mip_2d,
+            blended_surface_2d=blended_surface_2d,
             blended_mean_2d=blended_mean_2d,
-            unblended_mip_2d=unblended_mip_2d,
+            unblended_surface_2d=unblended_surface_2d,
             metrics=metrics,
         )

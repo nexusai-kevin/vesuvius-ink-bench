@@ -1,4 +1,10 @@
-"""Production CLI for low-VRAM 3D Hann-blended ink inference (vesuvius-infer)."""
+"""Production CLI for low-VRAM 3D Hann-blended ink inference (vesuvius-infer).
+
+The primary output product is the seamless 2D ink surface probability map
+(``surface_prob_2d`` in the OME-Zarr store, ``ink_surface_16bit.tiff``, and
+``ink_surface.png``), produced by Z-Hann-weighted depth aggregation over the
+3D Hann-blended depth-slab predictions stored at OME-Zarr level ``0``.
+"""
 
 from __future__ import annotations
 
@@ -10,9 +16,9 @@ from typing import Any, Dict, Optional, Tuple
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import numcodecs
 import numpy as np
 import zarr
+import zarr.codecs
 from PIL import Image
 
 from vesuvius_ink_bench.config import (
@@ -38,16 +44,16 @@ def _ensure_checkpoint(checkpoint_path: Path, hf_repo_id: str) -> Path:
 
 def _export_ome_zarr(
     blended_3d: np.ndarray,
-    blended_mip_2d: np.ndarray,
+    blended_surface_2d: np.ndarray,
     zarr_out_path: Path,
 ) -> Path:
-    """Export seamless 3D Hann-blended probabilities as a compressed OME-Zarr store."""
-    compressor = numcodecs.Blosc(cname="zstd", clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE)
+    """Export seamless 3D depth-slab predictions (``0``) and primary 2D surface map."""
+    compressor = zarr.codecs.BloscCodec(cname="zstd", clevel=3, shuffle="bitshuffle")
     root = zarr.open_group(str(zarr_out_path), mode="w")
     root.attrs["multiscales"] = [
         {
             "version": "0.4",
-            "name": "ink_probability_3d",
+            "name": "ink_probability_3d_depth_slabs",
             "axes": [
                 {"name": "z", "type": "space"},
                 {"name": "y", "type": "space"},
@@ -58,42 +64,42 @@ def _export_ome_zarr(
     ]
     d, h, w = blended_3d.shape
     chunks_3d = (min(64, d), min(128, h), min(128, w))
-    arr3d = root.create_dataset(
+    arr3d = root.create_array(
         "0",
         shape=blended_3d.shape,
         chunks=chunks_3d,
         dtype="float32",
-        compressor=compressor,
+        compressors=compressor,
         overwrite=True,
     )
     arr3d[:] = blended_3d.astype(np.float32, copy=False)
 
     chunks_2d = (min(256, h), min(256, w))
-    arr2d = root.create_dataset(
-        "surface_mip_2d",
-        shape=blended_mip_2d.shape,
+    arr2d = root.create_array(
+        "surface_prob_2d",
+        shape=blended_surface_2d.shape,
         chunks=chunks_2d,
         dtype="float32",
-        compressor=compressor,
+        compressors=compressor,
         overwrite=True,
     )
-    arr2d[:] = blended_mip_2d.astype(np.float32, copy=False)
+    arr2d[:] = blended_surface_2d.astype(np.float32, copy=False)
     return zarr_out_path
 
 
 def _export_16bit_tiff_and_png(
-    blended_mip_2d: np.ndarray,
+    blended_surface_2d: np.ndarray,
     tiff_path: Path,
     png_path: Path,
 ) -> Tuple[Path, Path]:
-    """Export 2D ink surface projection as a 16-bit grayscale TIFF and magma PNG."""
-    prob_clipped = np.clip(blended_mip_2d, 0.0, 1.0)
+    """Export the primary 2D ink surface projection as a 16-bit TIFF and PNG."""
+    prob_clipped = np.clip(blended_surface_2d, 0.0, 1.0)
     u16 = np.rint(prob_clipped * 65535.0).astype(np.uint16)
     Image.fromarray(u16).save(tiff_path, format="TIFF")
 
     fig, ax = plt.subplots(figsize=(6, 6), dpi=160)
     im = ax.imshow(prob_clipped, cmap="magma", vmin=0.0, vmax=1.0)
-    ax.set_title("Predicted 2D Ink Surface (3D Hann-Blended MIP)")
+    ax.set_title("Predicted 2D Ink Surface (3D + Z-Hann)")
     ax.axis("off")
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     fig.tight_layout()
@@ -115,6 +121,9 @@ def run_inference(
     checkpoint_path: Optional[Path] = None,
     hf_repo_id: Optional[str] = None,
     anon: bool = True,
+    pin_staging_buffer: bool = True,
+    use_channels_last_3d: bool = False,
+    seed: int = 42,
 ) -> Dict[str, Any]:
     """Run low-VRAM 3D Hann-blended ink inference and export OME-Zarr, 16-bit TIFF, and PNG."""
     src_defaults = ZarrSourceConfig()
@@ -132,7 +141,8 @@ def run_inference(
         roi_origin=origin or src_defaults.roi_origin,
         roi_shape=shape or src_defaults.roi_shape,
     )
-    loader = StreamingZarrSubvolumeLoader(source_cfg, CacheConfig())
+    cache_cfg = CacheConfig(pin_staging_buffer=pin_staging_buffer)
+    loader = StreamingZarrSubvolumeLoader(source_cfg, cache_cfg)
 
     if full_level:
         roi_origin = (0, 0, 0)
@@ -149,8 +159,12 @@ def run_inference(
         amp_dtype=amp_dtype,  # type: ignore[arg-type]
         checkpoint_path=ckpt_path,
         hf_repo_id=hf_repo_id or inf_defaults.hf_repo_id,
+        use_channels_last_3d=use_channels_last_3d,
+        seed=seed,
     )
-    pipeline = MixedPrecisionInkPipeline(model, inf_cfg)
+    pipeline = MixedPrecisionInkPipeline(
+        model, inf_cfg, pin_staging_buffer=cache_cfg.pin_staging_buffer
+    )
     result = pipeline.run(volume, warmup_batches=1)
 
     out_dir = Path(output_dir)
@@ -158,11 +172,11 @@ def run_inference(
 
     zarr_out = _export_ome_zarr(
         result.blended_3d,
-        result.blended_mip_2d,
+        result.blended_surface_2d,
         out_dir / "ink_predictions.zarr",
     )
     tiff_out, png_out = _export_16bit_tiff_and_png(
-        result.blended_mip_2d,
+        result.blended_surface_2d,
         out_dir / "ink_surface_16bit.tiff",
         out_dir / "ink_surface.png",
     )
@@ -175,9 +189,9 @@ def run_inference(
         "checkpoint": ckpt_meta,
         "metrics": result.metrics,
         "exports": {
+            "primary_tiff_16bit": str(tiff_out),
+            "primary_png_surface": str(png_out),
             "ome_zarr": str(zarr_out),
-            "tiff_16bit": str(tiff_out),
-            "png_surface": str(png_out),
         },
     }
     (out_dir / "inference_summary.json").write_text(
@@ -191,7 +205,11 @@ def main() -> None:
     inf_defaults = InferenceConfig()
     parser = argparse.ArgumentParser(
         prog="vesuvius-infer",
-        description="Low-VRAM 3D Hann-blended ink detection on AWS Open Data or local OME-Zarr volumes.",
+        description=(
+            "Low-VRAM 3D Hann-blended ink detection on AWS Open Data or local OME-Zarr volumes. "
+            "Exports primary 2D ink surface projections (16-bit TIFF, PNG, surface_prob_2d) "
+            "and 3D depth-slab predictions (OME-Zarr level 0)."
+        ),
     )
     parser.add_argument(
         "--uri",

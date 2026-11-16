@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-11-16T20:56:00.936590+00:00",
+  "timestamp_utc": "2026-11-16T22:36:14.358884+00:00",
   "environment": {
     "platform": "Windows-11-10.0.26200-SP0",
     "python": "3.12.13",
@@ -34,13 +34,15 @@
       384
     ],
     "roi_nonzero_fraction": 1.0,
-    "roi_bytes": 18874368
+    "roi_bytes": 18874368,
+    "input_intensity_scaling": "[0, 1] (uint8 / 255.0)"
   },
   "ddr5_cache": {
     "budget_gib": 16.0,
-    "cold_stream_seconds": 1.753,
-    "warm_ddr5_read_seconds": 0.007922,
-    "warm_ddr5_bandwidth_gb_s": 2.38,
+    "pin_staging_buffer": true,
+    "cold_stream_seconds": 1.7517,
+    "warm_ddr5_read_seconds": 0.00886,
+    "warm_ddr5_bandwidth_gb_s": 2.13,
     "after_cold_stats": {
       "hits": 0,
       "misses": 9,
@@ -49,7 +51,7 @@
       "bytes_cached": 18874368,
       "bytes_fetched_remote": 18874368,
       "bytes_served_from_cache": 0,
-      "remote_fetch_seconds": 13.2327
+      "remote_fetch_seconds": 11.6339
     },
     "after_warm_stats": {
       "hits": 9,
@@ -59,12 +61,13 @@
       "bytes_cached": 18874368,
       "bytes_fetched_remote": 18874368,
       "bytes_served_from_cache": 18874368,
-      "remote_fetch_seconds": 13.2327
+      "remote_fetch_seconds": 11.6339
     }
   },
   "pretrained_checkpoint": {
     "hf_repo_id": "scrollprize/ink_canonical_2um",
     "backbone": "ResNet3D-152 + 3D FPN Decoder (i3d)",
+    "weights_only": true,
     "checkpoint_path": "checkpoints\\ink_canonical_2um\\r152_3ddec_v2_l5_epoch13.ckpt",
     "epoch": 13,
     "global_step": 113246,
@@ -84,6 +87,9 @@
     "device": "cuda",
     "device_name": "NVIDIA GeForce RTX 5080",
     "amp_dtype": "bfloat16",
+    "pin_staging_buffer": true,
+    "use_channels_last_3d": false,
+    "seed": 42,
     "roi_shape": [
       128,
       384,
@@ -103,35 +109,71 @@
     "num_tiles": 75,
     "batch_size": 8,
     "total_processed_tile_voxels": 78643200,
-    "wall_seconds": 1.1936,
-    "gpu_seconds": 1.1425,
-    "throughput_roi_voxels_per_sec": 15813451.5,
-    "throughput_tile_voxels_per_sec": 68833531.1,
-    "tiles_per_sec": 65.64,
-    "peak_vram_allocated_mib": 2442.13,
+    "wall_seconds": 0.9736,
+    "gpu_seconds": 0.9453,
+    "throughput_roi_voxels_per_sec": 19385945.7,
+    "throughput_tile_voxels_per_sec": 83196727.9,
+    "tiles_per_sec": 79.34,
+    "peak_vram_allocated_mib": 2506.13,
     "peak_vram_reserved_mib": 2912.0,
     "vram_limit_gib": 14.5,
     "within_vram_budget": true,
     "seam_quality": {
-      "unblended_seam_gradient": 0.118811,
-      "unblended_interior_gradient": 0.009023,
-      "unblended_seam_to_interior_ratio": 13.1677,
-      "hann_seam_gradient": 0.033587,
-      "hann_interior_gradient": 0.008073,
-      "hann_seam_to_interior_ratio": 4.1602,
-      "seam_discontinuity_reduction_pct": 71.73
+      "unblended_seam_gradient": 0.114695,
+      "unblended_interior_gradient": 0.000937,
+      "unblended_seam_to_interior_ratio": 122.4066,
+      "hann_seam_gradient": 0.000661,
+      "hann_interior_gradient": 0.001906,
+      "hann_seam_to_interior_ratio": 0.3466,
+      "seam_discontinuity_reduction_pct": 99.42
     },
-    "ink_probability_stats_2d_mip": {
-      "min": 0.036768,
-      "max": 0.855716,
-      "mean": 0.348697,
-      "std": 0.147967,
-      "p50": 0.327662,
-      "p99": 0.708491
+    "ink_probability_stats_2d_surface": {
+      "min": 0.140929,
+      "max": 0.635512,
+      "mean": 0.36425,
+      "std": 0.140087,
+      "p50": 0.387741,
+      "p99": 0.615562
     }
+  },
+  "ground_truth_validation": {
+    "segment": "PHercParis4/segments/20230702185753 (2.4 um)",
+    "surface_uri": "s3://vesuvius-challenge-open-data/PHercParis4/segments/20230702185753/surface-volumes/2.4um-0.22m-78keV-volume-20260411134726.zarr",
+    "inklabels_uri": "s3://vesuvius-challenge-open-data/PHercParis4/segments/20230702185753/ink-labels/2.4um-volume-20260411134726/20260918/inklabels.zarr",
+    "roi_origin": [
+      0,
+      46080,
+      9728
+    ],
+    "roi_shape": [
+      109,
+      512,
+      512
+    ],
+    "supervised_fraction": 1.0,
+    "ground_truth_ink_fraction": 0.2798,
+    "accuracy": {
+      "threshold": 0.5,
+      "f0_5": 0.7903,
+      "dice_f1": 0.8271,
+      "iou": 0.7052,
+      "roc_auc": 0.9546,
+      "best_f0_5_threshold": 0.7,
+      "best_f0_5": 0.8724,
+      "dice_f1_at_best_f0_5": 0.8491,
+      "iou_at_best_f0_5": 0.7377
+    },
+    "inference_metrics": {
+      "gpu_seconds": 1.7668,
+      "throughput_tile_voxels_per_sec": 87244423.5,
+      "peak_vram_allocated_mib": 3121.41,
+      "peak_vram_reserved_mib": 3444.0
+    },
+    "ground_truth_validation_png": "reports\\ground_truth_validation.png"
   },
   "artifacts": {
     "ink_surface_prediction_png": "reports\\ink_surface_prediction.png",
-    "seam_blending_comparison_png": "reports\\seam_blending_comparison.png"
+    "seam_blending_comparison_png": "reports\\seam_blending_comparison.png",
+    "ground_truth_validation_png": "reports\\ground_truth_validation.png"
   }
 }
